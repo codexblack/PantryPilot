@@ -13,6 +13,9 @@ __pycache__/
 .ruff_cache/
 .uv-cache/
 .agents
+/backend/.venv/
+/backend/.pytest_cache/
+/backend/.pytest-tmp/
 backend/.coverage
 backend/coverage.xml
 cloudrun/secrets.env
