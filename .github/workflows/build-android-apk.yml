@@ -49,7 +49,7 @@ jobs:
       - name: Generate the Android project
         run: npx expo prebuild --platform android --no-install --clean
       - name: Assemble APK
-        run: ./android/gradlew :app:assembleRelease
+        run: cd android && ./gradlew :app:assembleRelease --no-daemon
       - name: Publish prerelease
         env:
           GH_TOKEN: ${{ github.token }}
