@@ -8,8 +8,10 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from openai import APIConnectionError, APIStatusError, APITimeoutError, AsyncOpenAI
+from starlette.concurrency import run_in_threadpool
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
+from starlette.responses import JSONResponse
 
 from app.config import get_settings
 from app.schemas import (
@@ -21,6 +23,7 @@ from app.schemas import (
     StoreLookupRequest,
     StoreLookupResponse,
 )
+from app.security import AppCheckVerificationError, verify_app_check_token
 from app.services.grocery import lookup_store_offers
 from app.services.planning import create_plan, drain_pending_plans
 from app.services.recipe_images import GeneratedRecipeImageProvider
@@ -127,6 +130,48 @@ app.add_middleware(
 )
 app.add_middleware(GZipMiddleware, minimum_size=1_000)
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.trusted_hosts)
+
+
+@app.middleware("http")
+async def require_verified_mobile_app(request: Request, call_next):
+    """Reject protected API calls that do not originate from a configured app."""
+    runtime_settings = get_settings()
+    if (
+        not runtime_settings.app_check_enforced
+        or request.method == "OPTIONS"
+        or request.url.path == "/health"
+    ):
+        return await call_next(request)
+
+    token = request.headers.get("X-Firebase-AppCheck", "")
+    if not token or not runtime_settings.app_check_project_id:
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "This API is available only to the PantryPilot mobile app."},
+        )
+
+    try:
+        claims = await run_in_threadpool(
+            verify_app_check_token,
+            token,
+            runtime_settings.app_check_project_id,
+        )
+    except AppCheckVerificationError:
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "This API is available only to the PantryPilot mobile app."},
+        )
+
+    if runtime_settings.app_check_allowed_ids and claims.get("sub") not in set(
+        runtime_settings.app_check_allowed_ids
+    ):
+        return JSONResponse(
+            status_code=403,
+            content={"detail": "This app is not approved to access the PantryPilot API."},
+        )
+
+    request.state.app_check_claims = claims
+    return await call_next(request)
 
 
 @app.get("/health")

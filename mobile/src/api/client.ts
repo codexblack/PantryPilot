@@ -3,6 +3,7 @@ import { fetch as expoFetch } from 'expo/fetch';
 import { File as ExpoFile } from 'expo-file-system';
 import { Platform } from 'react-native';
 
+import { getAppCheckToken } from './appCheck';
 import type {
   DietaryProfile,
   Ingredient,
@@ -85,6 +86,11 @@ type RequestOptions = {
   signal?: AbortSignal;
 };
 
+async function requestHeaders(headers?: Record<string, string>) {
+  const token = await getAppCheckToken();
+  return token ? { ...headers, 'X-Firebase-AppCheck': token } : headers;
+}
+
 async function fetchWithTimeout(
   url: string,
   init?: Parameters<typeof expoFetch>[1],
@@ -119,7 +125,7 @@ async function fetchWithTimeout(
 async function confirmApiIsReachable(signal?: AbortSignal) {
   const response = await fetchWithTimeout(
     apiUrl('/health'),
-    { method: 'GET' },
+    { method: 'GET', headers: await requestHeaders() },
     CONNECTION_TIMEOUT_MS,
     signal,
   );
@@ -174,7 +180,7 @@ export async function uploadScan(
   }
   const response = await fetchWithTimeout(
     apiUrl('/v1/scan'),
-    { method: 'POST', body: form },
+    { method: 'POST', headers: await requestHeaders(), body: form },
     MODEL_REQUEST_TIMEOUT_MS,
     options.signal,
   );
@@ -196,7 +202,7 @@ export async function requestPlan(
     apiUrl('/v1/plan'),
     {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: await requestHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(input),
     },
     MODEL_REQUEST_TIMEOUT_MS,
@@ -216,7 +222,7 @@ export async function requestStores(
     apiUrl('/v1/stores'),
     {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: await requestHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(input),
     },
     STORE_LOOKUP_TIMEOUT_MS,
@@ -241,7 +247,7 @@ export async function getRecipeImage(title: string): Promise<RecipeImage | null>
       apiUrl('/v1/recipe-images'),
       {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await requestHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ title }),
       },
       RECIPE_IMAGE_TIMEOUT_MS,

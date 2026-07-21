@@ -30,6 +30,12 @@ jobs:
           cache-dependency-path: mobile/package-lock.json
       - name: Install dependencies
         run: npm ci
+      - name: Materialize Firebase build configuration
+        env:
+          FIREBASE_ANDROID_CONFIG: ${{ secrets.FIREBASE_ANDROID_CONFIG }}
+        run: |
+          test -n "$FIREBASE_ANDROID_CONFIG"
+          printf '%s' "$FIREBASE_ANDROID_CONFIG" | base64 --decode > google-services.json
       - name: Queue EAS preview build
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}

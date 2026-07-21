@@ -18,6 +18,8 @@
   "dependencies": {
     "@expo/vector-icons": "^15.0.0",
     "@react-native-async-storage/async-storage": "2.2.0",
+    "@react-native-firebase/app": "^25.1.0",
+    "@react-native-firebase/app-check": "^25.1.0",
     "expo": "~57.0.7",
     "expo-constants": "~57.0.6",
     "expo-file-system": "~57.0.1",

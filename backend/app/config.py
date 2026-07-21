@@ -30,6 +30,9 @@ class Settings(BaseSettings):
     recipe_image_timeout_seconds: float = Field(default=35.0, ge=10, le=120)
     cors_allowed_origins: str = "http://localhost:8081,http://localhost:19006"
     allowed_hosts: str = "*"
+    app_check_enforced: bool = False
+    app_check_project_id: str | None = None
+    app_check_allowed_app_ids: str = ""
 
     @property
     def cors_origins(self) -> list[str]:
@@ -40,6 +43,11 @@ class Settings(BaseSettings):
     def trusted_hosts(self) -> list[str]:
         """Return normalized trusted hosts from a comma-separated setting."""
         return _split_csv(self.allowed_hosts) or ["*"]
+
+    @property
+    def app_check_allowed_ids(self) -> list[str]:
+        """Return the Firebase App IDs allowed to call protected endpoints."""
+        return _split_csv(self.app_check_allowed_app_ids)
 
 
 def _split_csv(value: str) -> list[str]:

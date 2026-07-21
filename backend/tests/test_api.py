@@ -74,6 +74,51 @@ def test_openai_failures_have_stable_public_status_codes() -> None:
         assert "recipe planning" in failure.detail.lower()
 
 
+def test_app_check_rejects_unverified_and_unapproved_clients(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Require a valid token from one of PantryPilot's registered app IDs."""
+    approved_app_id = "1:123:android:approved"
+    monkeypatch.setattr(
+        main_module,
+        "get_settings",
+        lambda: Settings(
+            app_check_enforced=True,
+            app_check_project_id="pantrypilot-test",
+            app_check_allowed_app_ids=approved_app_id,
+        ),
+    )
+
+    missing = client.get("/v1/plan")
+    assert missing.status_code == 401
+
+    def invalid_token(*_args: object) -> dict[str, object]:
+        raise main_module.AppCheckVerificationError("invalid")
+
+    monkeypatch.setattr(main_module, "verify_app_check_token", invalid_token)
+    invalid = client.get("/v1/plan", headers={"X-Firebase-AppCheck": "invalid"})
+    assert invalid.status_code == 401
+
+    monkeypatch.setattr(
+        main_module,
+        "verify_app_check_token",
+        lambda *_args: {"sub": "1:123:android:unapproved"},
+    )
+    unapproved = client.get("/v1/plan", headers={"X-Firebase-AppCheck": "valid"})
+    assert unapproved.status_code == 403
+
+    monkeypatch.setattr(
+        main_module,
+        "verify_app_check_token",
+        lambda *_args: {"sub": approved_app_id},
+    )
+    authorized = client.get("/v1/plan", headers={"X-Firebase-AppCheck": "valid"})
+    assert authorized.status_code == 405
+
+    health = client.get("/health")
+    assert health.status_code == 200
+
+
 def test_lifespan_manages_openai_client_and_background_work(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

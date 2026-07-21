@@ -24,12 +24,14 @@ The repository contains an Expo and React Native mobile app, a FastAPI API, a ha
 
 ```text
 Expo mobile application
-  |-- HTTPS scan, recipe, image, and store requests
+  |-- Firebase App Check attestation
+  |-- HTTPS scan, recipe, image, and store requests with an attestation token
   |-- Device location, with user permission
   `-- AsyncStorage for saved recipes and preview images
              |
              v
 Cloud Run default HTTPS endpoint
+  |-- Verifies Firebase App Check tokens and registered application IDs
              |
              v
 FastAPI container
@@ -171,10 +173,27 @@ Pydantic reads API settings from the process environment and from `backend/.env`
 | `RECIPE_IMAGE_TIMEOUT_SECONDS` | `35`                   | Maximum dish preview generation time.                                |
 | `CORS_ALLOWED_ORIGINS`         | Local Expo web origins | Comma-separated browser origins. Native clients do not use CORS.     |
 | `ALLOWED_HOSTS`                | `*`                    | Comma-separated HTTP Host allowlist.                                 |
+| `APP_CHECK_ENFORCED`           | `false`                | Requires a valid Firebase App Check token for every API route except `/health`. |
+| `APP_CHECK_PROJECT_ID`         | Empty                  | Firebase project ID used to verify App Check tokens.                 |
+| `APP_CHECK_ALLOWED_APP_IDS`    | Empty                  | Comma-separated Firebase Android and iOS App IDs permitted to call the API. |
 
 Cloud Run accepts at most 32 MiB for HTTP/1 requests. The production limits of 28 MB total and 7 MB per image leave room for multipart overhead while supporting four photos. Larger uploads require a direct-to-Cloud-Storage upload design rather than a higher API setting. [Cloud Run quotas](https://docs.cloud.google.com/run/quotas)
 
-`EXPO_PUBLIC_API_URL` is the only mobile runtime setting required in production. It is public configuration embedded into the application bundle and must never contain credentials.
+`EXPO_PUBLIC_API_URL` and `EXPO_PUBLIC_APP_CHECK_ENABLED` are the mobile production settings. Both are public build configuration and must never contain credentials.
+
+### Mobile app attestation
+
+Production native builds use Firebase App Check. Android uses Play Integrity and iOS uses App Attest. The app obtains an App Check token and sends it in `X-Firebase-AppCheck`; Cloud Run verifies the token and only accepts the two registered PantryPilot Firebase App IDs.
+
+The Firebase Android and iOS configuration files are excluded from version control. Store their base64-encoded contents as `FIREBASE_ANDROID_CONFIG` and `FIREBASE_IOS_CONFIG` in the GitHub `production` environment. The mobile release workflow materializes them only for the build.
+
+Before setting `APP_CHECK_ENFORCED=true`, complete these provider registrations and verify a real release build:
+
+1. Register the SHA-256 fingerprint of the EAS Android signing certificate and the Google Play App Signing certificate in the Firebase Android app.
+2. Set the Apple Developer Team ID for the Firebase iOS app and enable the App Attest capability for the Apple bundle ID.
+3. Test an Android closed-testing build and an iOS TestFlight build, then enable enforcement in `cloudrun/config.env` and deploy Cloud Run.
+
+Keep enforcement disabled for local development and Expo Go. Expo Go cannot load native App Check modules.
 
 ## HTTP API
 
@@ -187,6 +206,8 @@ Cloud Run accepts at most 32 MiB for HTTP/1 requests. The production limits of 2
 | `POST` | `/v1/recipe-images` | Lazily generates a dish preview.                          |
 
 The generated `/openapi.json` document is the authoritative request and response contract.
+
+When App Check enforcement is enabled, protected requests without a valid token receive `401`; tokens issued to another Firebase app receive `403`.
 
 ## Quality checks
 
@@ -410,6 +431,8 @@ Workload Identity Federation uses short-lived GitHub OIDC credentials and should
 
 The `preview` EAS profile creates a directly installable Android APK. The `production` profile creates store artifacts.
 
+`Build Mobile Release` is the GitHub Actions workflow for the production Android and iOS builds. It uses the `EXPO_TOKEN`, `FIREBASE_ANDROID_CONFIG`, and `FIREBASE_IOS_CONFIG` secrets from the `production` environment.
+
 ```bash
 cd mobile
 npx eas-cli@latest login
@@ -440,11 +463,12 @@ npx eas-cli@latest submit --platform ios --profile production
 | Deployment workflow authentication fails   | Verify `id-token: write`, the Workload Identity Provider resource name, the service-account binding, repository, and `main` branch condition. |
 | Google Shopping returns no priced matches  | Confirm `SERPAPI_API_KEY` is present in Secret Manager, location permission is granted, and inspect Cloud Run logs.                           |
 | A dish preview is absent                   | Preview generation is lazy and bounded by `RECIPE_IMAGE_TIMEOUT_SECONDS`; retry after checking the OpenAI key and Cloud Run logs.             |
+| Every protected request returns `401`      | Confirm the app was rebuilt with App Check enabled, the Android or iOS provider registration is complete, and Cloud Run has `APP_CHECK_ENFORCED=true`. |
 
 ## Security and operations
 
 - Keep provider, signing, and store credentials in Secret Manager or GitHub Environment secrets. Never place them in mobile code or a public environment variable.
-- The default Cloud Run URL is public so native clients can reach it. Before a broad launch, add user authentication and request quotas. A mobile-embedded shared secret is not authentication.
+- The Cloud Run URL is public for native reachability, but protected API routes require a Firebase App Check token from a registered PantryPilot app when enforcement is enabled. App Check is app attestation, not user authentication; add user authentication before introducing user accounts or shared server-side data.
 - Set Cloud Billing budgets and alerts before enabling production traffic. The three-instance cap limits a burst but does not replace application-level abuse protection.
 - Monitor Cloud Run request count, latency, instance count, error rate, and OpenAI and SerpAPI usage. Set log retention deliberately to control logging costs.
 - Rotate Secret Manager versions, deploy a new revision, and disable prior secret versions after verifying production.
