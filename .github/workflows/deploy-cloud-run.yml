@@ -60,14 +60,13 @@ jobs:
       - name: Verify required secret versions exist
         run: |
           for secret in pantrypilot-openai-api-key pantrypilot-serpapi-api-key pantrypilot-google-maps-api-key; do
-            gcloud secrets versions list "$secret" \
+            if ! gcloud secrets versions describe latest \
+              --secret="$secret" \
               --project="$PROJECT_ID" \
-              --filter="state=ENABLED" \
-              --limit=1 \
-              --format="value(name)" | grep --quiet . || {
-              echo "Missing an enabled version for $secret" >&2
+              --format="value(state)" | grep --quiet "^ENABLED$"; then
+              echo "Missing an enabled latest version for $secret" >&2
               exit 1
-            }
+            fi
           done
       - name: Authenticate Docker to Artifact Registry
         run: gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
