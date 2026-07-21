@@ -1,0 +1,100 @@
+name: Deploy Cloud Run
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows:
+      - CI
+    branches:
+      - main
+    types:
+      - completed
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: cloud-run-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy production API
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    env:
+      PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+      REGION: ${{ vars.GCP_REGION }}
+      REPOSITORY: ${{ vars.ARTIFACT_REGISTRY_REPOSITORY }}
+      RUNTIME_SERVICE_ACCOUNT: ${{ vars.CLOUD_RUN_RUNTIME_SERVICE_ACCOUNT }}
+      WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+      DEPLOY_SERVICE_ACCOUNT: ${{ vars.GCP_DEPLOY_SERVICE_ACCOUNT }}
+      SERVICE: pantrypilot-api
+      COMMIT_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+    steps:
+      - name: Check out release commit
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ env.COMMIT_SHA }}
+      - name: Validate deployment variables
+        shell: bash
+        run: |
+          for name in PROJECT_ID REGION REPOSITORY RUNTIME_SERVICE_ACCOUNT WORKLOAD_IDENTITY_PROVIDER DEPLOY_SERVICE_ACCOUNT; do
+            test -n "${!name}" || { echo "Missing production variable: $name" >&2; exit 1; }
+          done
+      - id: auth
+        name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          workload_identity_provider: ${{ env.WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.DEPLOY_SERVICE_ACCOUNT }}
+      - name: Set up Google Cloud CLI
+        uses: google-github-actions/setup-gcloud@v3
+      - name: Authenticate Docker to Artifact Registry
+        run: gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+      - name: Build and publish immutable image
+        env:
+          IMAGE_URI: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/pantrypilot-api:${{ env.COMMIT_SHA }}
+        run: |
+          docker buildx build \
+            --platform linux/amd64 \
+            --push \
+            --file backend/Dockerfile \
+            --tag "$IMAGE_URI" \
+            .
+      - name: Deploy Cloud Run revision
+        env:
+          IMAGE_URI: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/pantrypilot-api:${{ env.COMMIT_SHA }}
+        run: |
+          gcloud run deploy "$SERVICE" \
+            --project="$PROJECT_ID" \
+            --region="$REGION" \
+            --image="$IMAGE_URI" \
+            --service-account="$RUNTIME_SERVICE_ACCOUNT" \
+            --env-vars-file=cloudrun/config.env \
+            --port=8000 \
+            --ingress=all \
+            --allow-unauthenticated \
+            --min-instances=0 \
+            --max-instances=3 \
+            --cpu=1 \
+            --memory=1Gi \
+            --concurrency=1 \
+            --timeout=360 \
+            --cpu-throttling \
+            --no-cpu-boost \
+            --quiet
+      - name: Verify generated HTTPS endpoint
+        run: |
+          service_url="$(gcloud run services describe "$SERVICE" \
+            --project="$PROJECT_ID" \
+            --region="$REGION" \
+            --format='value(status.url)')"
+          curl --fail --retry 3 --retry-all-errors "$service_url/health"

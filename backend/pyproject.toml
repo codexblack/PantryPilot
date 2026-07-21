@@ -1,0 +1,23 @@
+[tool.pytest.ini_options]
+addopts = "--strict-config --strict-markers"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+src = ["app", "tests"]
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["ASYNC", "B", "C4", "E", "F", "I", "PIE", "RUF", "SIM", "UP"]
+ignore = ["B008"]
+
+[tool.ruff.lint.per-file-ignores]
+"app/services/planning.py" = ["E501"]
+"app/services/vision.py" = ["E501"]
+"tests/test_api.py" = ["E501"]
+"tests/test_inventory.py" = ["E501"]
+
+[tool.ruff.format]
+docstring-code-format = true
+indent-style = "space"
+quote-style = "double"

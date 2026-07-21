@@ -1,0 +1,27 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+.uv-cache/
+.agents
+backend/.coverage
+backend/coverage.xml
+cloudrun/secrets.env
+gha-creds-*.json
+
+# Node / Expo
+node_modules/
+mobile/node_modules/
+mobile/.expo/
+mobile/dist/
+*.tsbuildinfo
+
+# Uploaded source media is processed in a temp directory and is never persisted.
+uploads/
