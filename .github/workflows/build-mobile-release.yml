@@ -32,6 +32,7 @@ jobs:
         run: npm ci
       - name: Synchronize Firebase configuration with EAS
         env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
           FIREBASE_ANDROID_CONFIG: ${{ secrets.FIREBASE_ANDROID_CONFIG }}
           FIREBASE_IOS_CONFIG: ${{ secrets.FIREBASE_IOS_CONFIG }}
         run: |
