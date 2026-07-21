@@ -185,7 +185,7 @@ Cloud Run accepts at most 32 MiB for HTTP/1 requests. The production limits of 2
 
 Production native builds use Firebase App Check. Android uses Play Integrity and iOS uses App Attest. The app obtains an App Check token and sends it in `X-Firebase-AppCheck`; Cloud Run verifies the token and only accepts the two registered PantryPilot Firebase App IDs.
 
-The Firebase Android and iOS configuration files are excluded from version control. Store their base64-encoded contents as `FIREBASE_ANDROID_CONFIG` and `FIREBASE_IOS_CONFIG` in the GitHub `production` environment. The mobile release workflow materializes them only for the build.
+The Firebase Android and iOS configuration files are excluded from version control. Store their base64-encoded contents as `FIREBASE_ANDROID_CONFIG` and `FIREBASE_IOS_CONFIG` in the GitHub `production` environment. The release workflow writes the decrypted files to EAS secret file variables, and the dynamic Expo config supplies those paths only on EAS build workers.
 
 Before setting `APP_CHECK_ENFORCED=true`, complete these provider registrations and verify a real release build:
 
@@ -431,7 +431,7 @@ Workload Identity Federation uses short-lived GitHub OIDC credentials and should
 
 The `preview` EAS profile creates a directly installable Android APK. The `production` profile creates store artifacts.
 
-`Build Mobile Release` is the GitHub Actions workflow for the production Android and iOS builds. It uses the `EXPO_TOKEN`, `FIREBASE_ANDROID_CONFIG`, and `FIREBASE_IOS_CONFIG` secrets from the `production` environment.
+`Build Mobile Release` is the GitHub Actions workflow for the production Android and iOS builds. It uses the `EXPO_TOKEN`, `FIREBASE_ANDROID_CONFIG`, and `FIREBASE_IOS_CONFIG` secrets from the `production` environment. EAS stores the decrypted mobile configuration as `GOOGLE_SERVICES_JSON` and `GOOGLE_SERVICE_INFO_PLIST` secret file variables.
 
 ```bash
 cd mobile

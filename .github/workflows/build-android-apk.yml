@@ -30,12 +30,29 @@ jobs:
           cache-dependency-path: mobile/package-lock.json
       - name: Install dependencies
         run: npm ci
-      - name: Materialize Firebase build configuration
+      - name: Synchronize Firebase configuration with EAS
         env:
           FIREBASE_ANDROID_CONFIG: ${{ secrets.FIREBASE_ANDROID_CONFIG }}
         run: |
           test -n "$FIREBASE_ANDROID_CONFIG"
           printf '%s' "$FIREBASE_ANDROID_CONFIG" | base64 --decode > google-services.json
+          if ! npx eas-cli@latest env:create \
+            --name GOOGLE_SERVICES_JSON \
+            --value google-services.json \
+            --type file \
+            --environment preview \
+            --visibility secret \
+            --non-interactive; then
+            npx eas-cli@latest env:update preview \
+              --variable-name GOOGLE_SERVICES_JSON \
+              --variable-environment preview \
+              --name GOOGLE_SERVICES_JSON \
+              --value google-services.json \
+              --type file \
+              --environment preview \
+              --visibility secret \
+              --non-interactive
+          fi
       - name: Queue EAS preview build
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
