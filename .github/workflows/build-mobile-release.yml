@@ -1,4 +1,4 @@
-name: Build Mobile Release
+name: Build Android Release
 
 on:
   workflow_dispatch:
@@ -12,7 +12,7 @@ concurrency:
 
 jobs:
   build:
-    name: Queue Android and iOS production builds
+    name: Queue Android production build
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: production
@@ -34,12 +34,9 @@ jobs:
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
           FIREBASE_ANDROID_CONFIG: ${{ secrets.FIREBASE_ANDROID_CONFIG }}
-          FIREBASE_IOS_CONFIG: ${{ secrets.FIREBASE_IOS_CONFIG }}
         run: |
           test -n "$FIREBASE_ANDROID_CONFIG"
-          test -n "$FIREBASE_IOS_CONFIG"
           printf '%s' "$FIREBASE_ANDROID_CONFIG" | base64 --decode > google-services.json
-          printf '%s' "$FIREBASE_IOS_CONFIG" | base64 --decode > GoogleService-Info.plist
           sync_file_variable() {
             local name="$1"
             local file="$2"
@@ -62,8 +59,7 @@ jobs:
             fi
           }
           sync_file_variable GOOGLE_SERVICES_JSON google-services.json
-          sync_file_variable GOOGLE_SERVICE_INFO_PLIST GoogleService-Info.plist
-      - name: Queue EAS production builds
+      - name: Queue EAS Android production build
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-        run: npx eas-cli@latest build --platform all --profile production --non-interactive --no-wait
+        run: npx eas-cli@latest build --platform android --profile production --non-interactive --no-wait
