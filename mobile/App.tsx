@@ -6,6 +6,7 @@ import {
   AppState,
   Easing,
   Image,
+  KeyboardAvoidingView,
   Linking,
   Modal,
   PanResponder,
@@ -1542,16 +1543,21 @@ export default function App() {
           onRequestClose={() => setSelectedSavedRecipe(null)}
         >
           <SafeAreaView style={styles.detailSafeArea}>
-            {selectedSavedRecipe ? (
-              <SavedRecipeDetail
-                key={selectedSavedRecipe.savedAt}
-                entry={selectedSavedRecipe}
-                onBack={() => setSelectedSavedRecipe(null)}
-                onDelete={() => confirmDeleteSavedRecipe(selectedSavedRecipe)}
-                onSaveImage={saveSavedRecipeImage}
-                onSaveNotes={saveRecipeNotes}
-              />
-            ) : null}
+            <KeyboardAvoidingView
+              behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+              style={styles.detailKeyboardAvoiding}
+            >
+              {selectedSavedRecipe ? (
+                <SavedRecipeDetail
+                  key={selectedSavedRecipe.savedAt}
+                  entry={selectedSavedRecipe}
+                  onBack={() => setSelectedSavedRecipe(null)}
+                  onDelete={() => confirmDeleteSavedRecipe(selectedSavedRecipe)}
+                  onSaveImage={saveSavedRecipeImage}
+                  onSaveNotes={saveRecipeNotes}
+                />
+              ) : null}
+            </KeyboardAvoidingView>
           </SafeAreaView>
         </Modal>
 
@@ -1988,6 +1994,7 @@ function SavedRecipeDetail({
 }) {
   const [notes, setNotes] = useState(entry.notes);
   const [savingNotes, setSavingNotes] = useState(false);
+  const scrollViewRef = useRef<ScrollView>(null);
   const noteWords = notes.trim().split(/\s+/).filter(Boolean).length;
 
   async function saveNotes() {
@@ -2001,7 +2008,13 @@ function SavedRecipeDetail({
 
   const recipe = entry.recipe;
   return (
-    <ScrollView contentContainerStyle={styles.detailContent} showsVerticalScrollIndicator={false}>
+    <ScrollView
+      ref={scrollViewRef}
+      contentContainerStyle={styles.detailContent}
+      keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+      keyboardShouldPersistTaps="handled"
+      showsVerticalScrollIndicator={false}
+    >
       <View style={styles.detailHeader}>
         <Pressable
           accessibilityLabel="Back to saved recipes"
@@ -2069,6 +2082,9 @@ function SavedRecipeDetail({
         <TextInput
           multiline
           onChangeText={(value) => setNotes(limitRecipeNotes(value))}
+          onFocus={() => {
+            requestAnimationFrame(() => scrollViewRef.current?.scrollToEnd({ animated: true }));
+          }}
           placeholder="e.g. Add chili flakes next time"
           placeholderTextColor="#8B948C"
           style={styles.notesInput}
@@ -3021,6 +3037,7 @@ const styles = StyleSheet.create({
   },
   dialogConfirmText: { color: '#FFFFFF', fontSize: 13, fontWeight: '800' },
   detailSafeArea: { backgroundColor: colors.canvas, flex: 1 },
+  detailKeyboardAvoiding: { flex: 1 },
   detailContent: { paddingBottom: 42, paddingHorizontal: 16, paddingTop: 12 },
   generatedDetailContent: { paddingTop: 12 },
   detailHeader: {

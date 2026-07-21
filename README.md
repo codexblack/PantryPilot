@@ -20,6 +20,35 @@ The repository contains an Expo and React Native mobile app, a FastAPI API, a ha
 - Nearby store lookup independent from recipe generation
 - Abortable mobile requests and bounded provider, upload, and media-processing timeouts
 
+## AI implementation and delivery workflow
+
+### Runtime model responsibilities
+
+| Model | Role in PantryPilot | Implementation detail |
+| ----- | ------------------- | --------------------- |
+| `gpt-5.6` | Kitchen recognition and recipe planning | The FastAPI service sends sampled fridge frames as image inputs through the Responses API, then uses a separate structured recipe-planning request with the normalized inventory, dietary constraints, cuisine, and taste profile. |
+| `gpt-image-2` | Optional dish preview | A small, lazy-generated food image is requested only after a recipe exists, so image latency never blocks the recipe result. The successful preview is saved on the device with the recipe. |
+
+### Codex-assisted engineering
+
+**Codex accelerated the workflow** from product iteration through deployment. GPT-5.6 Sol Ultra was used through Codex for repository-wide implementation, debugging, prompt and API-contract refinement, test-driven cleanup, release automation, and operational verification. It was a development tool, not a runtime dependency of the mobile app.
+
+Sol Ultra delegated independent, read-heavy work to subagents for three bounded roles:
+
+- Backend and model-integration review, including structured-output handling, prompt constraints, and API error paths.
+- Mobile interaction and native-build review, including media uploads, saved-recipe persistence, keyboard behavior, and Android packaging.
+- Deployment and release review, including Cloud Run configuration, Firebase App Check, GitHub Actions, EAS configuration, and artifact publishing.
+
+The main Codex agent integrated the findings, made serialized source changes, and ran the final verification steps. This division kept architecture and product decisions in one place while allowing investigations and validation to proceed independently. See the [Codex subagent workflow documentation](https://learn.chatgpt.com/docs/agent-configuration/subagents.md) for the execution model.
+
+### Key implementation decisions
+
+- **Fast, structured AI responses:** `gpt-5.6` uses explicit response schemas for inventory and recipe data. The backend validates the parsed result before it reaches the mobile client.
+- **Useful rather than rigid recipe generation:** the planner prefers a complete cuisine-appropriate main dish. It can request a small top-up when inventory alone cannot make a credible meal, without forcing unnecessary purchases.
+- **Cost-aware architecture:** uploads are temporary, recipes and generated previews persist on-device, and the API is stateless on Cloud Run. A direct GitHub APK build avoids consuming EAS queue capacity for tester installs.
+- **Separation of release paths:** GitHub Releases produces a directly installable tester APK. EAS production builds produce the Android App Bundle intended for Google Play distribution and the production App Check path.
+- **Defensive mobile behavior:** uploads go directly to the API rather than failing on a short health-check preflight, so Cloud Run cold starts do not look like a local-network failure.
+
 ## Architecture
 
 ```text
@@ -418,6 +447,8 @@ Workload Identity Federation uses short-lived GitHub OIDC credentials and should
 
 `Build Android Release` is the GitHub Actions workflow for the production Android bundle. It uses `EXPO_TOKEN` and `FIREBASE_ANDROID_CONFIG` from the `production` environment. EAS stores the decrypted Firebase configuration as its `GOOGLE_SERVICES_JSON` secret file variable.
 
+The `tester-apk` EAS profile creates an installable Android APK through EAS when a hosted build is preferred. It uses the production API but leaves App Check disabled while Cloud Run enforcement remains disabled; it is not a replacement for the Play-distributed production bundle.
+
 ```bash
 cd mobile
 npx eas-cli@latest login
@@ -425,6 +456,9 @@ npx eas-cli@latest build:configure
 
 # Google Play store artifact
 npx eas-cli@latest build --platform android --profile production
+
+# Hosted, directly installable tester APK
+npx eas-cli@latest build --platform android --profile tester-apk
 ```
 
 Submit the completed bundle only after closed testing:
