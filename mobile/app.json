@@ -39,7 +39,10 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.pantrypilot.app",
-      "googleServicesFile": "./GoogleService-Info.plist"
+      "googleServicesFile": "./GoogleService-Info.plist",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "package": "com.pantrypilot.app",
