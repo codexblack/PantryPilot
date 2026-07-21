@@ -52,7 +52,7 @@ The API is stateless. It does not persist recipes, photos, videos, or generated 
 |-- .github/workflows/
 |   |-- ci.yml                       Validation, tests, image scan, and container smoke test
 |   |-- deploy-cloud-run.yml         Production API deployment
-|   `-- build-android-apk.yml        On-demand EAS preview APK build
+|   `-- build-android-apk.yml        On-demand Android APK prerelease publishing
 |-- backend/
 |   |-- app/                         FastAPI application and service integrations
 |   |-- tests/                       API and domain tests
@@ -185,7 +185,7 @@ Cloud Run accepts at most 32 MiB for HTTP/1 requests. The production limits of 2
 
 Production native builds use Firebase App Check. Android uses Play Integrity and iOS uses App Attest. The app obtains an App Check token and sends it in `X-Firebase-AppCheck`; Cloud Run verifies the token and only accepts the two registered PantryPilot Firebase App IDs.
 
-The Firebase Android and iOS configuration files are excluded from version control. Store their base64-encoded contents as `FIREBASE_ANDROID_CONFIG` and `FIREBASE_IOS_CONFIG` in the GitHub `production` environment. The release workflow writes the decrypted files to EAS secret file variables, and the dynamic Expo config supplies those paths only on EAS build workers.
+Firebase configuration files are excluded from version control. Store the base64-encoded Android file as `FIREBASE_ANDROID_CONFIG` in the GitHub `production` environment. The Android store workflow writes it to the EAS `GOOGLE_SERVICES_JSON` secret file variable; the direct APK workflow supplies it only while generating the native Android project. Add `FIREBASE_IOS_CONFIG` when iOS builds are enabled again.
 
 Before setting `APP_CHECK_ENFORCED=true`, complete these provider registrations and verify a real release build:
 
@@ -345,26 +345,11 @@ curl --fail "$API_URL/health"
 echo "$API_URL"
 ```
 
-Cloud Run prints and retains the generated HTTPS URL across new revisions. Store that URL in the EAS preview and production environments:
-
-```bash
-cd mobile
-npx eas-cli@latest env:create \
-  --name EXPO_PUBLIC_API_URL \
-  --value "$API_URL" \
-  --environment preview \
-  --visibility plaintext
-
-npx eas-cli@latest env:create \
-  --name EXPO_PUBLIC_API_URL \
-  --value "$API_URL" \
-  --environment production \
-  --visibility plaintext
-```
+Cloud Run prints and retains the generated HTTPS URL across new revisions. The repository’s current URL is configured in `mobile/eas.json` for the Android store bundle and `.github/workflows/build-android-apk.yml` for the directly installable APK. Update both values if the Cloud Run service URL changes.
 
 ### GitHub Actions deployment
 
-`deploy-cloud-run.yml` deploys only after the `CI` workflow succeeds on `main`, or when manually dispatched. It uses Workload Identity Federation rather than a long-lived Google Cloud key. `build-android-apk.yml` is manual so ordinary backend changes do not consume EAS build capacity.
+`deploy-cloud-run.yml` deploys only after the `CI` workflow succeeds on `main`, or when manually dispatched. It uses Workload Identity Federation rather than a long-lived Google Cloud key. `build-android-apk.yml` is manual so ordinary backend changes do not trigger a mobile build or consume EAS build capacity.
 
 Create a GitHub Environment named `production`, then configure these variables:
 
@@ -377,7 +362,7 @@ Create a GitHub Environment named `production`, then configure these variables:
 | `GCP_WORKLOAD_IDENTITY_PROVIDER`    | Full Workload Identity Provider resource name                 |
 | `GCP_DEPLOY_SERVICE_ACCOUNT`        | GitHub deployment service-account email                       |
 
-Add `EXPO_TOKEN` as a `production` environment secret. Create it from the [Expo access-token page](https://expo.dev/settings/access-tokens). It authenticates EAS builds and must not be committed or shared in chat.
+Add `FIREBASE_ANDROID_CONFIG` as a `production` environment secret containing the base64-encoded `google-services.json` file. The direct APK workflow uses it while generating the native Android project. Add `EXPO_TOKEN` only when using the EAS production bundle workflow. Create it from the [Expo access-token page](https://expo.dev/settings/access-tokens); it must not be committed or shared in chat.
 
 Create the GitHub deployment identity and grant only the permissions it needs:
 
@@ -427,30 +412,25 @@ gcloud iam workload-identity-pools providers describe github \
 
 Workload Identity Federation uses short-lived GitHub OIDC credentials and should be restricted to the intended repository and branch. [Google Cloud guidance](https://docs.cloud.google.com/iam/docs/workload-identity-federation-with-deployment-pipelines)
 
-## Android and iOS releases
+## Android releases
 
-The `preview` EAS profile creates a directly installable Android APK. The `production` profile creates store artifacts.
+`Publish Android APK` builds a directly installable APK on GitHub Actions and uploads it to the rolling `android-apk-latest` prerelease. It is intended for direct testing, uses the production API, and disables Firebase App Check because it is not distributed through Google Play. It is not a Google Play submission artifact.
 
-`Build Mobile Release` is the GitHub Actions workflow for the production Android and iOS builds. It uses the `EXPO_TOKEN`, `FIREBASE_ANDROID_CONFIG`, and `FIREBASE_IOS_CONFIG` secrets from the `production` environment. EAS stores the decrypted mobile configuration as `GOOGLE_SERVICES_JSON` and `GOOGLE_SERVICE_INFO_PLIST` secret file variables.
+`Build Android Release` is the GitHub Actions workflow for the production Android bundle. It uses `EXPO_TOKEN` and `FIREBASE_ANDROID_CONFIG` from the `production` environment. EAS stores the decrypted Firebase configuration as its `GOOGLE_SERVICES_JSON` secret file variable.
 
 ```bash
 cd mobile
 npx eas-cli@latest login
 npx eas-cli@latest build:configure
 
-# Installable tester APK
-npx eas-cli@latest build --platform android --profile preview
-
-# Store artifacts
+# Google Play store artifact
 npx eas-cli@latest build --platform android --profile production
-npx eas-cli@latest build --platform ios --profile production
 ```
 
-Submit completed store artifacts only after closed testing or TestFlight validation:
+Submit the completed bundle only after closed testing:
 
 ```bash
 npx eas-cli@latest submit --platform android --profile production
-npx eas-cli@latest submit --platform ios --profile production
 ```
 
 ## Troubleshooting

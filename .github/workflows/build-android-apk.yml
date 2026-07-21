@@ -1,24 +1,27 @@
-name: Build Android APK
+name: Publish Android APK
 
 on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
-  group: android-apk-build
+  group: android-apk-publish
   cancel-in-progress: false
 
 jobs:
-  build:
-    name: Build internal Android APK
+  publish:
+    name: Build and publish Android APK
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     environment: production
     defaults:
       run:
         working-directory: mobile
+    env:
+      EXPO_PUBLIC_API_URL: https://pantrypilot-api-vmyzdhul3a-uc.a.run.app
+      EXPO_PUBLIC_APP_CHECK_ENABLED: "false"
     steps:
       - name: Check out repository
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
@@ -28,33 +31,38 @@ jobs:
           node-version: "22"
           cache: npm
           cache-dependency-path: mobile/package-lock.json
+      - name: Set up Java
+        uses: actions/setup-java@dded0888837ed1f317902acf8a20df0ad188d165 # v5
+        with:
+          distribution: temurin
+          java-version: "17"
       - name: Install dependencies
         run: npm ci
-      - name: Synchronize Firebase configuration with EAS
+      - name: Prepare Firebase configuration
         env:
-          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
           FIREBASE_ANDROID_CONFIG: ${{ secrets.FIREBASE_ANDROID_CONFIG }}
         run: |
           test -n "$FIREBASE_ANDROID_CONFIG"
-          printf '%s' "$FIREBASE_ANDROID_CONFIG" | base64 --decode > google-services.json
-          if ! npx eas-cli@latest env:create \
-            --name GOOGLE_SERVICES_JSON \
-            --value google-services.json \
-            --type file \
-            --environment production \
-            --visibility secret \
-            --non-interactive; then
-            npx eas-cli@latest env:update production \
-              --variable-name GOOGLE_SERVICES_JSON \
-              --variable-environment production \
-              --name GOOGLE_SERVICES_JSON \
-              --value google-services.json \
-              --type file \
-              --environment production \
-              --visibility secret \
-              --non-interactive
-          fi
-      - name: Queue EAS production APK build
+          config_path="$RUNNER_TEMP/google-services.json"
+          printf '%s' "$FIREBASE_ANDROID_CONFIG" | base64 --decode > "$config_path"
+          echo "GOOGLE_SERVICES_JSON=$config_path" >> "$GITHUB_ENV"
+      - name: Generate the Android project
+        run: npx expo prebuild --platform android --no-install --clean
+      - name: Assemble APK
+        run: ./android/gradlew :app:assembleRelease
+      - name: Publish prerelease
         env:
-          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-        run: npx eas-cli@latest build --platform android --profile production-apk --non-interactive --no-wait
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          asset_path="android/app/build/outputs/apk/release/app-release.apk"
+          test -f "$asset_path"
+          tag="android-apk-latest"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release upload "$tag" "$asset_path#PantryPilot.apk" --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$tag" "$asset_path#PantryPilot.apk" \
+              --prerelease \
+              --title "PantryPilot Android APK" \
+              --notes "Installable Android APK for direct testing. Google Play releases use the separate production app bundle." \
+              --repo "$GITHUB_REPOSITORY"
+          fi

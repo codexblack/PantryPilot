@@ -20,18 +20,6 @@
         "EXPO_PUBLIC_API_URL": "https://pantrypilot-api-vmyzdhul3a-uc.a.run.app",
         "EXPO_PUBLIC_APP_CHECK_ENABLED": "true"
       }
-    },
-    "production-apk": {
-      "autoIncrement": true,
-      "distribution": "internal",
-      "environment": "production",
-      "android": {
-        "buildType": "apk"
-      },
-      "env": {
-        "EXPO_PUBLIC_API_URL": "https://pantrypilot-api-vmyzdhul3a-uc.a.run.app",
-        "EXPO_PUBLIC_APP_CHECK_ENABLED": "true"
-      }
     }
   },
   "submit": {
