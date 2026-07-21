@@ -57,6 +57,18 @@ jobs:
           service_account: ${{ env.DEPLOY_SERVICE_ACCOUNT }}
       - name: Set up Google Cloud CLI
         uses: google-github-actions/setup-gcloud@v3
+      - name: Verify required secret versions exist
+        run: |
+          for secret in pantrypilot-openai-api-key pantrypilot-serpapi-api-key pantrypilot-google-maps-api-key; do
+            gcloud secrets versions list "$secret" \
+              --project="$PROJECT_ID" \
+              --filter="state=ENABLED" \
+              --limit=1 \
+              --format="value(name)" | grep --quiet . || {
+              echo "Missing an enabled version for $secret" >&2
+              exit 1
+            }
+          done
       - name: Authenticate Docker to Artifact Registry
         run: gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
       - name: Build and publish immutable image
