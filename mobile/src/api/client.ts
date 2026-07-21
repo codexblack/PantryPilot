@@ -14,7 +14,6 @@ import type {
 } from '../types';
 
 const MODEL_REQUEST_TIMEOUT_MS = 330_000;
-const CONNECTION_TIMEOUT_MS = 8_000;
 const STORE_LOOKUP_TIMEOUT_MS = 30_000;
 const RECIPE_IMAGE_TIMEOUT_MS = 45_000;
 const RECIPE_IMAGE_CACHE_LIMIT = 12;
@@ -112,25 +111,13 @@ async function fetchWithTimeout(
     }
     if (controller.signal.aborted) {
       throw new Error(
-        `The API did not respond within ${Math.round(timeoutMs / 1000)} seconds at ${new URL(url).origin}. Check that the phone and server are on the same network.`,
+        `The API did not respond within ${Math.round(timeoutMs / 1000)} seconds at ${new URL(url).origin}. Check your internet connection and the API service status.`,
       );
     }
     throw error;
   } finally {
     clearTimeout(timeout);
     externalSignal?.removeEventListener('abort', abortFromCaller);
-  }
-}
-
-async function confirmApiIsReachable(signal?: AbortSignal) {
-  const response = await fetchWithTimeout(
-    apiUrl('/health'),
-    { method: 'GET', headers: await requestHeaders() },
-    CONNECTION_TIMEOUT_MS,
-    signal,
-  );
-  if (!response.ok) {
-    throw new Error(`The API health check failed (${response.status}). Check the FastAPI server.`);
   }
 }
 
@@ -169,7 +156,6 @@ export async function uploadScan(
   if (input.images && (input.images.length < 1 || input.images.length > 4)) {
     throw new Error('Choose between 1 and 4 photos.');
   }
-  await confirmApiIsReachable(options.signal);
   const form = new FormData();
   if (input.video) {
     appendMedia(form, 'video', input.video, 'pantry-walkthrough.mp4');
