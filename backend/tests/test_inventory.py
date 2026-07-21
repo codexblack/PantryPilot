@@ -20,6 +20,303 @@ from fastapi import HTTPException, UploadFile
 from starlette.datastructures import Headers
 
 
+def _upload(payload: bytes, filename: str, content_type: str) -> UploadFile:
+    return UploadFile(
+        io.BytesIO(payload),
+        filename=filename,
+        headers=Headers({"content-type": content_type}),
+    )
+
+
+def test_media_type_validation_accepts_native_and_mobile_uploads() -> None:
+    assert video_module.has_expected_media_type(_upload(b"x", "photo.jpg", "image/jpeg"), "image/")
+    assert video_module.has_expected_media_type(
+        _upload(b"x", "photo.jpg", "application/octet-stream"), "image/"
+    )
+    assert video_module.has_expected_media_type(_upload(b"x", "photo.jpg", ""), "image/")
+    assert not video_module.has_expected_media_type(
+        _upload(b"x", "photo.jpg", "text/plain"), "image/"
+    )
+
+
+def test_persist_upload_streams_content_and_removes_invalid_uploads() -> None:
+    path = asyncio.run(
+        video_module.persist_upload(_upload(b"video-data", "walkthrough.bin", "video/mp4"), 20)
+    )
+    try:
+        assert path.suffix == ".mp4"
+        assert path.read_bytes() == b"video-data"
+    finally:
+        path.unlink(missing_ok=True)
+
+    for payload, limit, expected_detail in (
+        (b"", 20, "empty"),
+        (b"too-large", 3, "larger"),
+    ):
+        with pytest.raises(HTTPException) as caught:
+            asyncio.run(
+                video_module.persist_upload(_upload(payload, "walkthrough.mp4", "video/mp4"), limit)
+            )
+        assert expected_detail in caught.value.detail.lower()
+
+
+def test_photo_upload_validation_rejects_unsafe_input() -> None:
+    async def exercise() -> None:
+        with pytest.raises(HTTPException, match="between 1 and 2"):
+            await video_module.prepare_image_uploads([], 2, 20, 10)
+        with pytest.raises(HTTPException, match="standard image"):
+            await video_module.prepare_image_uploads(
+                [_upload(b"photo", "photo.txt", "text/plain")], 2, 20, 10
+            )
+        with pytest.raises(HTTPException, match="Each photo"):
+            await video_module.prepare_image_uploads(
+                [_upload(b"123456", "photo.jpg", "image/jpeg")], 2, 20, 5
+            )
+        with pytest.raises(HTTPException, match="total upload"):
+            await video_module.prepare_image_uploads(
+                [
+                    _upload(b"123456", "first.jpg", "image/jpeg"),
+                    _upload(b"123456", "second.jpg", "image/jpeg"),
+                ],
+                2,
+                10,
+                10,
+            )
+        with pytest.raises(HTTPException, match="empty"):
+            await video_module.prepare_image_uploads(
+                [_upload(b"", "photo.jpg", "image/jpeg")], 2, 20, 10
+            )
+
+    asyncio.run(exercise())
+
+
+def test_image_headers_and_normalization_reject_malformed_data(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    png = (
+        b"\x89PNG\r\n\x1a\n"
+        + (13).to_bytes(4, "big")
+        + b"IHDR"
+        + (3).to_bytes(4, "big")
+        + (2).to_bytes(4, "big")
+    )
+    jpeg = b"\xff\xd8\xff\xc0\x00\x07\x08\x00\x02\x00\x03"
+    webp = (
+        b"RIFF\x00\x00\x00\x00WEBP"
+        + b"VP8X"
+        + (10).to_bytes(4, "little")
+        + b"\x00\x00\x00\x00"
+        + (2).to_bytes(3, "little")
+        + (1).to_bytes(3, "little")
+    )
+
+    assert video_module._image_dimensions(png) == (3, 2)
+    assert video_module._image_dimensions(jpeg) == (3, 2)
+    assert video_module._image_dimensions(webp) == (3, 2)
+    assert video_module._jpeg_dimensions(b"\xff\xd8\xff\xd9") is None
+    assert video_module._jpeg_dimensions(b"\xff\xd8\xff\xc0\x00\x01") is None
+    assert video_module._jpeg_dimensions(b"\xff\xd8\xff\xc0\x00\x06\x08\x00\x02\x00") is None
+    assert video_module._webp_dimensions(b"RIFF\x00\x00\x00\x00WEBPVP8X\x06\x00\x00\x00") is None
+
+    with pytest.raises(HTTPException, match="supported JPEG"):
+        video_module._normalize_image(b"not-an-image")
+
+    monkeypatch.setattr(video_module, "_image_dimensions", lambda _raw: (2, 2))
+    monkeypatch.setattr(video_module.cv2, "imdecode", lambda *_args: None)
+    with pytest.raises(HTTPException, match="could not read"):
+        video_module._normalize_image(b"image")
+
+    monkeypatch.setattr(
+        video_module.cv2,
+        "imdecode",
+        lambda *_args: np.zeros((1, 2, 3), dtype=np.uint8),
+    )
+    with pytest.raises(HTTPException, match="inconsistent"):
+        video_module._normalize_image(b"image")
+
+    monkeypatch.setattr(
+        video_module.cv2,
+        "imdecode",
+        lambda *_args: np.zeros((2, 2, 3), dtype=np.uint8),
+    )
+    monkeypatch.setattr(video_module.cv2, "imencode", lambda *_args: (False, np.array([])))
+    with pytest.raises(HTTPException, match="could not prepare"):
+        video_module._normalize_image(b"image")
+
+
+def test_image_normalization_downscales_large_frames(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, tuple[int, int]] = {}
+    monkeypatch.setattr(video_module, "_image_dimensions", lambda _raw: (1600, 900))
+    monkeypatch.setattr(
+        video_module.cv2,
+        "imdecode",
+        lambda *_args: np.zeros((900, 1600, 3), dtype=np.uint8),
+    )
+
+    def resize(image: np.ndarray, size: tuple[int, int], **_kwargs: object) -> np.ndarray:
+        captured["size"] = size
+        return image
+
+    monkeypatch.setattr(video_module.cv2, "resize", resize)
+    monkeypatch.setattr(
+        video_module.cv2,
+        "imencode",
+        lambda *_args: (True, np.array([1, 2], dtype=np.uint8)),
+    )
+
+    assert video_module._normalize_image(b"image") == b"\x01\x02"
+    assert captured["size"] == (1280, 720)
+
+
+def test_video_helpers_handle_single_frame_and_invalid_captures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert video_module._evenly_spaced_frame_indices(0, 8) == frozenset()
+    assert video_module._evenly_spaced_frame_indices(1, 8) == frozenset({0})
+    assert video_module._is_distinct(b"\x00" * 4, [b"\xff" * 4])
+    assert not video_module._is_distinct(b"\x00" * 4, [b"\x00" * 4])
+
+    class UnopenedCapture:
+        def isOpened(self) -> bool:
+            return False
+
+    monkeypatch.setattr(video_module.cv2, "VideoCapture", lambda _path: UnopenedCapture())
+    with pytest.raises(HTTPException, match="could not read"):
+        video_module.extract_keyframes(Path("invalid.mp4"), 8, 35)
+
+    class MetadataCapture:
+        def __init__(self, width: int, height: int, frames: int) -> None:
+            self.width = width
+            self.height = height
+            self.frames = frames
+            self.released = False
+
+        def isOpened(self) -> bool:
+            return True
+
+        def get(self, property_id: int) -> float:
+            if property_id == video_module.cv2.CAP_PROP_FRAME_WIDTH:
+                return self.width
+            if property_id == video_module.cv2.CAP_PROP_FRAME_HEIGHT:
+                return self.height
+            if property_id == video_module.cv2.CAP_PROP_FPS:
+                return 1
+            if property_id == video_module.cv2.CAP_PROP_FRAME_COUNT:
+                return self.frames
+            return 0
+
+        def release(self) -> None:
+            self.released = True
+
+    oversized = MetadataCapture(5_000, 5_000, 0)
+    monkeypatch.setattr(video_module.cv2, "VideoCapture", lambda _path: oversized)
+    with pytest.raises(HTTPException, match="resolution"):
+        video_module.extract_keyframes(Path("large.mp4"), 8, 35)
+    assert oversized.released
+
+    too_long = MetadataCapture(2, 2, 36)
+    monkeypatch.setattr(video_module.cv2, "VideoCapture", lambda _path: too_long)
+    with pytest.raises(HTTPException, match="under 35"):
+        video_module.extract_keyframes(Path("long.mp4"), 8, 35)
+    assert too_long.released
+
+
+def test_image_header_parsers_handle_supported_variants_and_truncated_data() -> None:
+    assert video_module._png_dimensions(b"not-a-png") is None
+    assert video_module._jpeg_dimensions(b"\xff\xd8\x00\xff\xff") is None
+    assert video_module._jpeg_dimensions(b"\xff\xd8\xff\x01\xff\xd9") is None
+    assert video_module._webp_dimensions(b"RIFF\x00\x00\x00\x00WEBPJUNK\x00\x00\x00\x00") is None
+
+    vp8_payload = b"\x00\x00\x00\x9d\x01\x2a\x03\x00\x02\x00"
+    assert video_module._webp_chunk_dimensions(b"VP8 ", vp8_payload) == (3, 2)
+
+    packed = (2 | (1 << 14)).to_bytes(4, "little")
+    assert video_module._webp_chunk_dimensions(b"VP8L", b"\x2f" + packed) == (3, 2)
+    assert video_module._webp_chunk_dimensions(b"VP8L", b"not-a-webp-frame") is None
+
+
+def test_video_decoder_handles_bad_metadata_and_resizes_selected_frames(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeCapture:
+        def __init__(self) -> None:
+            self.reads = 0
+
+        def isOpened(self) -> bool:
+            return True
+
+        def get(self, property_id: int) -> float:
+            if property_id == video_module.cv2.CAP_PROP_FPS:
+                return float("nan")
+            if property_id == video_module.cv2.CAP_PROP_FRAME_COUNT:
+                return float("nan")
+            if property_id in {
+                video_module.cv2.CAP_PROP_FRAME_WIDTH,
+                video_module.cv2.CAP_PROP_FRAME_HEIGHT,
+            }:
+                return 2
+            return 0
+
+        def read(self) -> tuple[bool, np.ndarray | None]:
+            self.reads += 1
+            if self.reads > 1:
+                return False, None
+            return True, np.zeros((900, 1600, 3), dtype=np.uint8)
+
+        def release(self) -> None:
+            return None
+
+    captured: dict[str, tuple[int, int]] = {}
+
+    def resize(image: np.ndarray, size: tuple[int, int], **_kwargs: object) -> np.ndarray:
+        captured["size"] = size
+        return image
+
+    monkeypatch.setattr(video_module.cv2, "VideoCapture", lambda _path: FakeCapture())
+    monkeypatch.setattr(video_module.cv2, "resize", resize)
+    monkeypatch.setattr(
+        video_module.cv2,
+        "imencode",
+        lambda *_args: (True, np.array([9], dtype=np.uint8)),
+    )
+    monkeypatch.setattr(video_module, "_is_distinct", lambda _fingerprint, _existing: True)
+
+    assert video_module.extract_keyframes(Path("metadata-free.mp4"), 1, 35) == [b"\x09"]
+    assert captured["size"] == (1280, 720)
+
+
+def test_video_decoder_enforces_timeout_after_reading_a_frame(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeCapture:
+        def isOpened(self) -> bool:
+            return True
+
+        def get(self, property_id: int) -> float:
+            if property_id == video_module.cv2.CAP_PROP_FPS:
+                return 30
+            if property_id in {
+                video_module.cv2.CAP_PROP_FRAME_WIDTH,
+                video_module.cv2.CAP_PROP_FRAME_HEIGHT,
+            }:
+                return 2
+            return 0
+
+        def read(self) -> tuple[bool, np.ndarray]:
+            return True, np.zeros((2, 2, 3), dtype=np.uint8)
+
+        def release(self) -> None:
+            return None
+
+    timestamps = iter((0.0, 0.0, 1.0))
+    monkeypatch.setattr(video_module.cv2, "VideoCapture", lambda _path: FakeCapture())
+    monkeypatch.setattr(video_module, "_MAX_VIDEO_DECODE_WALL_SECONDS", 0.5)
+    monkeypatch.setattr(video_module.time, "monotonic", lambda: next(timestamps))
+
+    with pytest.raises(HTTPException, match="processing time"):
+        video_module.extract_keyframes(Path("slow-after-read.mp4"), 1, 35)
+
+
 def test_normalizes_recipe_aliases() -> None:
     assert normalize_name(" Fresh   Mozzarella ") == "mozzarella"
     assert normalize_name("cherry tomatoes") == "tomato"

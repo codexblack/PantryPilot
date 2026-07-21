@@ -1433,7 +1433,7 @@ export default function App() {
                   ) : null}
                 </View>
                 <View style={styles.expiresSoonCopy}>
-                  <Text style={styles.expiresSoonTitle}>Expires soon</Text>
+                  <Text style={styles.expiresSoonTitle}>Use Soon</Text>
                   <Text style={styles.expiresSoonHint}>
                     Highlight this item in your use-soon list
                   </Text>

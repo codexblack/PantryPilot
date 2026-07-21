@@ -1,6 +1,8 @@
 # PantryPilot
 
 [![codecov](https://codecov.io/gh/codexblack/PantryPilot/graph/badge.svg)](https://codecov.io/gh/codexblack/PantryPilot)
+[![CI](https://github.com/codexblack/PantryPilot/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/codexblack/PantryPilot/actions/workflows/ci.yml)
+[![Cloud Run deploy](https://github.com/codexblack/PantryPilot/actions/workflows/deploy-cloud-run.yml/badge.svg?branch=main)](https://github.com/codexblack/PantryPilot/actions/workflows/deploy-cloud-run.yml)
 
 PantryPilot is a mobile kitchen inventory and recipe planning application. Users can scan a kitchen with one short video or up to four photos, correct the detected inventory, choose a cuisine and dietary restrictions, and generate a practical main dish. When ingredients are missing, the API can return nearby Google Shopping offers.
 

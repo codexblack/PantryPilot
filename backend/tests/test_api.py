@@ -7,6 +7,7 @@ import app.main as main_module
 import app.services.planning as planning_module
 import app.services.vision as vision_module
 import cv2
+import httpx
 import numpy as np
 import pytest
 from app.config import Settings
@@ -25,6 +26,7 @@ from app.services.inflight import InFlightRequestRegistry
 from app.services.planning import SUPPORTED_CUISINES
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from openai import APIConnectionError, APIStatusError, APITimeoutError
 
 client = TestClient(app)
 
@@ -40,6 +42,212 @@ def _jpeg_bytes() -> bytes:
     ok, encoded = cv2.imencode(".jpg", image)
     assert ok
     return encoded.tobytes()
+
+
+def test_openai_failures_have_stable_public_status_codes() -> None:
+    request = httpx.Request("POST", "https://api.openai.com/v1/responses")
+    errors_and_codes = (
+        (APITimeoutError(request=request), 504),
+        (APIConnectionError(request=request), 503),
+        (
+            APIStatusError(
+                "rate limited",
+                response=httpx.Response(429, request=request),
+                body=None,
+            ),
+            503,
+        ),
+        (
+            APIStatusError(
+                "provider failed",
+                response=httpx.Response(500, request=request),
+                body=None,
+            ),
+            502,
+        ),
+        (RuntimeError("unexpected"), 502),
+    )
+
+    for error, expected_status in errors_and_codes:
+        failure = main_module._openai_failure(error, "recipe planning")
+        assert failure.status_code == expected_status
+        assert "recipe planning" in failure.detail.lower()
+
+
+def test_lifespan_manages_openai_client_and_background_work(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    class FakeAsyncOpenAI:
+        def __init__(self, **kwargs: object) -> None:
+            assert kwargs["api_key"] == "test-key"
+
+        async def close(self) -> None:
+            calls.append("close")
+
+    async def drain_plans() -> None:
+        calls.append("plans")
+
+    async def drain_images() -> None:
+        calls.append("images")
+
+    monkeypatch.setattr(main_module, "get_settings", lambda: Settings(openai_api_key="test-key"))
+    monkeypatch.setattr(main_module, "AsyncOpenAI", FakeAsyncOpenAI)
+    monkeypatch.setattr(main_module, "drain_pending_plans", drain_plans)
+    monkeypatch.setattr(
+        main_module.GeneratedRecipeImageProvider,
+        "drain_pending_tasks",
+        drain_images,
+    )
+    fake_app = SimpleNamespace(state=SimpleNamespace())
+
+    async def exercise() -> None:
+        async with main_module.lifespan(fake_app):
+            assert isinstance(fake_app.state.openai_client, FakeAsyncOpenAI)
+
+    asyncio.run(exercise())
+    assert calls == ["plans", "images", "close"]
+
+
+def test_scan_translates_photo_provider_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(main_module, "get_settings", lambda: Settings(openai_api_key="test-key"))
+
+    async def unreadable(*_args: object, **_kwargs: object) -> list[Ingredient]:
+        raise ValueError("malformed provider response")
+
+    monkeypatch.setattr(main_module, "recognize_frames", unreadable)
+    response = client.post(
+        "/v1/scan",
+        files=[("images", ("shelf.jpg", _jpeg_bytes(), "image/jpeg"))],
+    )
+    assert response.status_code == 502
+    assert "unreadable" in response.json()["detail"].lower()
+
+    async def unavailable(*_args: object, **_kwargs: object) -> list[Ingredient]:
+        raise APIConnectionError(
+            request=httpx.Request("POST", "https://api.openai.com/v1/responses")
+        )
+
+    monkeypatch.setattr(main_module, "recognize_frames", unavailable)
+    response = client.post(
+        "/v1/scan",
+        files=[("images", ("shelf.jpg", _jpeg_bytes(), "image/jpeg"))],
+    )
+    assert response.status_code == 503
+
+    async def pass_through(*_args: object, **_kwargs: object) -> list[Ingredient]:
+        raise HTTPException(status_code=418, detail="Provider declined the request")
+
+    monkeypatch.setattr(main_module, "recognize_frames", pass_through)
+    response = client.post(
+        "/v1/scan",
+        files=[("images", ("shelf.jpg", _jpeg_bytes(), "image/jpeg"))],
+    )
+    assert response.status_code == 418
+
+
+def test_video_scan_validates_uploads_and_translates_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    invalid_type = client.post(
+        "/v1/scan",
+        files=[("video", ("walkthrough.txt", b"video", "text/plain"))],
+    )
+    assert invalid_type.status_code == 415
+
+    attempts = 0
+
+    async def persist(*_args: object, **_kwargs: object) -> Path:
+        nonlocal attempts
+        attempts += 1
+        path = tmp_path / f"walkthrough-{attempts}.mp4"
+        path.write_bytes(b"video")
+        return path
+
+    async def extract(*_args: object, **_kwargs: object) -> list[bytes]:
+        return [b"frame"]
+
+    monkeypatch.setattr(main_module, "persist_upload", persist)
+    monkeypatch.setattr(main_module, "extract_keyframes_async", extract)
+
+    demo_response = client.post(
+        "/v1/scan",
+        files=[("video", ("walkthrough.mp4", b"video", "video/mp4"))],
+    )
+    assert demo_response.status_code == 200
+    assert demo_response.json()["demo_mode"] is True
+
+    monkeypatch.setattr(main_module, "get_settings", lambda: Settings(openai_api_key="test-key"))
+
+    async def unreadable(*_args: object, **_kwargs: object) -> list[Ingredient]:
+        raise ValueError("malformed provider response")
+
+    monkeypatch.setattr(main_module, "recognize_frames", unreadable)
+    response = client.post(
+        "/v1/scan",
+        files=[("video", ("walkthrough.mp4", b"video", "video/mp4"))],
+    )
+    assert response.status_code == 502
+    assert "unreadable" in response.json()["detail"].lower()
+
+    async def failed(*_args: object, **_kwargs: object) -> list[Ingredient]:
+        raise RuntimeError("provider failed")
+
+    monkeypatch.setattr(main_module, "recognize_frames", failed)
+    response = client.post(
+        "/v1/scan",
+        files=[("video", ("walkthrough.mp4", b"video", "video/mp4"))],
+    )
+    assert response.status_code == 502
+    assert "video analysis failed" in response.json()["detail"].lower()
+
+    async def unavailable(*_args: object, **_kwargs: object) -> list[Ingredient]:
+        raise APIConnectionError(
+            request=httpx.Request("POST", "https://api.openai.com/v1/responses")
+        )
+
+    monkeypatch.setattr(main_module, "recognize_frames", unavailable)
+    response = client.post(
+        "/v1/scan",
+        files=[("video", ("walkthrough.mp4", b"video", "video/mp4"))],
+    )
+    assert response.status_code == 503
+
+
+def test_plan_and_store_endpoints_translate_provider_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def unreadable_plan(*_args: object, **_kwargs: object) -> None:
+        raise ValueError("malformed provider response")
+
+    monkeypatch.setattr(main_module, "create_plan", unreadable_plan)
+    plan_response = client.post(
+        "/v1/plan",
+        json={
+            "cuisine": "Italian",
+            "ingredients": [
+                {"name": "Eggs", "normalized_name": "egg", "confidence": 0.9, "freshness": "fresh"}
+            ],
+        },
+    )
+    assert plan_response.status_code == 502
+    assert "unreadable" in plan_response.json()["detail"].lower()
+
+    async def failed_lookup(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("shopping provider failed")
+
+    monkeypatch.setattr(main_module, "lookup_store_offers", failed_lookup)
+    store_response = client.post(
+        "/v1/stores",
+        json={
+            "items": ["milk"],
+            "location": {"latitude": 39.1, "longitude": -84.5},
+        },
+    )
+    assert store_response.status_code == 502
+    assert "store lookup failed" in store_response.json()["detail"].lower()
 
 
 def test_health() -> None:
