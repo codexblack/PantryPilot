@@ -79,6 +79,7 @@ jobs:
             --image="$IMAGE_URI" \
             --service-account="$RUNTIME_SERVICE_ACCOUNT" \
             --env-vars-file=cloudrun/config.env \
+            --set-secrets=OPENAI_API_KEY=pantrypilot-openai-api-key:latest,SERPAPI_API_KEY=pantrypilot-serpapi-api-key:latest,GOOGLE_MAPS_API_KEY=pantrypilot-google-maps-api-key:latest \
             --port=8000 \
             --ingress=all \
             --allow-unauthenticated \
