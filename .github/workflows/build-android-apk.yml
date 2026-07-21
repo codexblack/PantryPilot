@@ -7,7 +7,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: android-preview-build
+  group: android-apk-build
   cancel-in-progress: false
 
 jobs:
@@ -41,20 +41,20 @@ jobs:
             --name GOOGLE_SERVICES_JSON \
             --value google-services.json \
             --type file \
-            --environment preview \
+            --environment production \
             --visibility secret \
             --non-interactive; then
-            npx eas-cli@latest env:update preview \
+            npx eas-cli@latest env:update production \
               --variable-name GOOGLE_SERVICES_JSON \
-              --variable-environment preview \
+              --variable-environment production \
               --name GOOGLE_SERVICES_JSON \
               --value google-services.json \
               --type file \
-              --environment preview \
+              --environment production \
               --visibility secret \
               --non-interactive
           fi
-      - name: Queue EAS preview build
+      - name: Queue EAS production APK build
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-        run: npx eas-cli@latest build --platform android --profile preview --non-interactive --no-wait
+        run: npx eas-cli@latest build --platform android --profile production-apk --non-interactive --no-wait
