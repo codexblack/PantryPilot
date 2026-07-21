@@ -33,6 +33,8 @@ The repository contains an Expo and React Native mobile app, a FastAPI API, a ha
 
 **Codex accelerated the workflow** from product iteration through deployment. GPT-5.6 Sol Ultra was used through Codex for repository-wide implementation, debugging, prompt and API-contract refinement, test-driven cleanup, release automation, and operational verification. It was a development tool, not a runtime dependency of the mobile app.
 
+Downloading ChatGPT Windows Desktop app, we used the Codex agent to read this plan, and create the full application end-to-end, one step at a time. It helped put together the Expo screens, FastAPI endpoints, inventory scan flow and recipe generation flow, instead of us having to build all the pieces separately first. As we tested the one-shot generated app locally, we kept adding features to it one by one, and suggesting UI changes. Codex was then used to look through the relevant files, make focused changes, and run the relevant type checks, linting and tests before moving to the next feature.
+
 Sol Ultra delegated independent, read-heavy work to subagents for three bounded roles:
 
 - Backend and model-integration review, including structured-output handling, prompt constraints, and API error paths.
